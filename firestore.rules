@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isAdmin() { 
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'yigitleromer@gmail.com'
+      );
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // Validation Helpers
+    function isValidSnippet(data) {
+      return data.userId == request.auth.uid &&
+             data.videoId is string && data.videoId.size() <= 64 &&
+             data.comment is string && data.comment.size() <= 500 &&
+             data.startSec >= 0 &&
+             data.createdAt == request.time;
+    }
+
+    // --- Routes ---
+
+    // Public Feed & Snippets
+    match /snippets/{snippetId} {
+      allow list, get: if true; // Publicly readable feed
+      allow create: if isSignedIn() && isValidSnippet(incoming());
+      allow update: if isSignedIn() && (
+        // Allow likesCount increment
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) && incoming().likesCount == existing().likesCount + 1) ||
+        // Owner update logic (can change comment or category)
+        (isOwner(existing().userId) && incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'category']))
+      );
+      allow delete: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
+
+      // Comments sub-collection
+      match /comments/{commentId} {
+        allow list, get: if true;
+        allow create: if isSignedIn() && incoming().userId == request.auth.uid && incoming().text.size() <= 300;
+        allow delete: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
+      }
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if true;
+      allow list: if false; // Prevention of user scraping
+      allow create, update: if isSignedIn() && isOwner(userId) && incoming().displayName is string;
+      allow delete: if isAdmin();
+    }
+
+    // Admins
+    match /admins/{userId} {
+      allow get: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}

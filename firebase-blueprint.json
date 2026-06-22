@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Public profile details for Olinkbu users.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "bio": { "type": "string" },
+        "followersCount": { "type": "number" },
+        "followingCount": { "type": "number" },
+        "snippetsCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Snippet": {
+      "title": "Snippet",
+      "description": "A user-curated video clip with a comment.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "videoId": { "type": "string" },
+        "platform": { "type": "string", "enum": ["youtube", "spotify"] },
+        "startSec": { "type": "number" },
+        "endSec": { "type": "number" },
+        "comment": { "type": "string", "description": "The user's interpretation or reason for sharing." },
+        "category": { "type": "string", "description": "e.g., #felsefe, #spor, #motivasyon" },
+        "likesCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "videoUrl", "videoId", "startSec", "comment", "category", "createdAt"]
+    },
+    "Comment": {
+      "title": "Snippet Comment",
+      "description": "Social engagement on a snippet.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data."
+    },
+    "/snippets/{snippetId}": {
+      "schema": "Snippet",
+      "description": "The primary social feed items."
+    },
+    "/snippets/{snippetId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on a specific snippet."
+    },
+    "/admins/{userId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string", "enum": ["admin"] }
+        }
+      },
+      "description": "System administrators."
+    }
+  }
+}
