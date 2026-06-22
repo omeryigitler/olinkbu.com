@@ -76,6 +76,17 @@ service cloud.firestore {
              data.category is string && data.category.size() > 0 && data.category.size() <= 40;
     }
 
+    function isValidReaction(data, userId) {
+      return data.keys().hasOnly(['userId', 'reactionType', 'category', 'platform', 'createdAt', 'updatedAt']) &&
+             data.keys().hasAll(['userId', 'reactionType', 'createdAt']) &&
+             data.userId == userId &&
+             data.reactionType in ['lightbulb', 'deep', 'fire', 'inspire'] &&
+             isOptionalString(data, 'category', 40) &&
+             isOptionalString(data, 'platform', 40) &&
+             data.createdAt == request.time &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
     function isValidComment(data) {
       return data.keys().hasOnly(['userId', 'userName', 'userPhoto', 'text', 'createdAt']) &&
              data.keys().hasAll(['userId', 'text', 'createdAt']) &&
@@ -91,7 +102,32 @@ service cloud.firestore {
              (!('uid' in data) || data.uid == userId) &&
              isOptionalString(data, 'displayName', 120) &&
              isOptionalString(data, 'photoURL', 1000) &&
-             isOptionalString(data, 'bio', 300);
+             isOptionalString(data, 'bio', 300) &&
+             (!('createdAt' in data) || data.createdAt == request.time) &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function isValidSave(data, userId, snippetId) {
+      return data.keys().hasOnly(['userId', 'snippetId', 'ownerId', 'category', 'platform', 'createdAt']) &&
+             data.keys().hasAll(['userId', 'snippetId', 'createdAt']) &&
+             data.userId == userId &&
+             data.snippetId == snippetId &&
+             isOptionalString(data, 'ownerId', 128) &&
+             isOptionalString(data, 'category', 40) &&
+             isOptionalString(data, 'platform', 40) &&
+             data.createdAt == request.time;
+    }
+
+    function isValidTasteEvent(data, userId) {
+      return data.keys().hasOnly(['userId', 'type', 'snippetId', 'reactionType', 'category', 'platform', 'createdAt']) &&
+             data.keys().hasAll(['userId', 'type', 'createdAt']) &&
+             data.userId == userId &&
+             data.type in ['save', 'reaction', 'follow', 'collection_add', 'share', 'skip', 'watch_complete'] &&
+             isOptionalString(data, 'snippetId', 128) &&
+             isOptionalString(data, 'reactionType', 40) &&
+             isOptionalString(data, 'category', 40) &&
+             isOptionalString(data, 'platform', 40) &&
+             data.createdAt == request.time;
     }
 
     // --- Routes ---
@@ -100,18 +136,18 @@ service cloud.firestore {
     match /snippets/{snippetId} {
       allow list, get: if true; // Publicly readable feed
       allow create: if isSignedIn() && isValidSnippet(incoming());
-      allow update: if isSignedIn() && (
-        // Allow likesCount increment only
-        (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) &&
-          incoming().likesCount is number &&
-          existing().likesCount is number &&
-          incoming().likesCount == existing().likesCount + 1) ||
-        // Owner can only update editable text metadata
-        (isOwner(existing().userId) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'category']) &&
-          isValidSnippetOwnerUpdate(incoming()))
-      );
+      allow update: if isSignedIn() &&
+        isOwner(existing().userId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'category']) &&
+        isValidSnippetOwnerUpdate(incoming());
       allow delete: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
+
+      // One reaction edge per user per snippet. Counters should be derived server-side later.
+      match /reactions/{userId} {
+        allow list, get: if true;
+        allow create, update: if isOwner(userId) && isValidReaction(incoming(), userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
 
       // Comments sub-collection
       match /comments/{commentId} {
@@ -127,6 +163,20 @@ service cloud.firestore {
       allow list: if false; // Prevention of user scraping
       allow create, update: if isSignedIn() && isOwner(userId) && isValidUserProfile(incoming(), userId);
       allow delete: if isAdmin();
+
+      // Cloud synced saves, replacing localStorage-only saved snippets.
+      match /saves/{snippetId} {
+        allow list, get: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidSave(incoming(), userId, snippetId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      // Append-only taste events for future recommendation and DNA scoring jobs.
+      match /tasteEvents/{eventId} {
+        allow list, get: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidTasteEvent(incoming(), userId);
+        allow update, delete: if false;
+      }
     }
 
     // Admins
