@@ -18,13 +18,80 @@ service cloud.firestore {
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
 
-    // Validation Helpers
+    // --- Validation Helpers ---
+    function isOptionalString(data, field, maxLength) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLength);
+    }
+
+    function isValidNonNegativeNumber(value) {
+      return value is number && value >= 0;
+    }
+
+    function isValidReactions(data) {
+      return !('reactions' in data) || (
+        data.reactions is map &&
+        data.reactions.keys().hasOnly(['lightbulb', 'deep', 'fire', 'inspire']) &&
+        (!('lightbulb' in data.reactions) || isValidNonNegativeNumber(data.reactions.lightbulb)) &&
+        (!('deep' in data.reactions) || isValidNonNegativeNumber(data.reactions.deep)) &&
+        (!('fire' in data.reactions) || isValidNonNegativeNumber(data.reactions.fire)) &&
+        (!('inspire' in data.reactions) || isValidNonNegativeNumber(data.reactions.inspire))
+      );
+    }
+
     function isValidSnippet(data) {
-      return data.userId == request.auth.uid &&
-             data.videoId is string && data.videoId.size() <= 64 &&
-             data.comment is string && data.comment.size() <= 500 &&
-             data.startSec >= 0 &&
+      return data.keys().hasOnly([
+               'userId',
+               'userName',
+               'userPhoto',
+               'videoUrl',
+               'videoId',
+               'platform',
+               'startSec',
+               'endSec',
+               'comment',
+               'category',
+               'likesCount',
+               'reactions',
+               'createdAt'
+             ]) &&
+             data.keys().hasAll(['userId', 'videoId', 'platform', 'startSec', 'endSec', 'comment', 'category', 'likesCount', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isOptionalString(data, 'userName', 120) &&
+             isOptionalString(data, 'userPhoto', 1000) &&
+             isOptionalString(data, 'videoUrl', 1000) &&
+             data.videoId is string && data.videoId.size() <= 128 &&
+             data.platform in ['youtube', 'spotify'] &&
+             isValidNonNegativeNumber(data.startSec) &&
+             isValidNonNegativeNumber(data.endSec) &&
+             data.endSec >= data.startSec &&
+             data.comment is string && data.comment.size() > 0 && data.comment.size() <= 500 &&
+             data.category is string && data.category.size() > 0 && data.category.size() <= 40 &&
+             data.likesCount == 0 &&
+             isValidReactions(data) &&
              data.createdAt == request.time;
+    }
+
+    function isValidSnippetOwnerUpdate(data) {
+      return data.comment is string && data.comment.size() > 0 && data.comment.size() <= 500 &&
+             data.category is string && data.category.size() > 0 && data.category.size() <= 40;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasOnly(['userId', 'userName', 'userPhoto', 'text', 'createdAt']) &&
+             data.keys().hasAll(['userId', 'text', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isOptionalString(data, 'userName', 120) &&
+             isOptionalString(data, 'userPhoto', 1000) &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 300 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'bio', 'createdAt', 'updatedAt']) &&
+             (!('uid' in data) || data.uid == userId) &&
+             isOptionalString(data, 'displayName', 120) &&
+             isOptionalString(data, 'photoURL', 1000) &&
+             isOptionalString(data, 'bio', 300);
     }
 
     // --- Routes ---
@@ -34,17 +101,22 @@ service cloud.firestore {
       allow list, get: if true; // Publicly readable feed
       allow create: if isSignedIn() && isValidSnippet(incoming());
       allow update: if isSignedIn() && (
-        // Allow likesCount increment
-        (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) && incoming().likesCount == existing().likesCount + 1) ||
-        // Owner update logic (can change comment or category)
-        (isOwner(existing().userId) && incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'category']))
+        // Allow likesCount increment only
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) &&
+          incoming().likesCount is number &&
+          existing().likesCount is number &&
+          incoming().likesCount == existing().likesCount + 1) ||
+        // Owner can only update editable text metadata
+        (isOwner(existing().userId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'category']) &&
+          isValidSnippetOwnerUpdate(incoming()))
       );
       allow delete: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
 
       // Comments sub-collection
       match /comments/{commentId} {
         allow list, get: if true;
-        allow create: if isSignedIn() && incoming().userId == request.auth.uid && incoming().text.size() <= 300;
+        allow create: if isSignedIn() && isValidComment(incoming());
         allow delete: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
       }
     }
@@ -53,7 +125,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if true;
       allow list: if false; // Prevention of user scraping
-      allow create, update: if isSignedIn() && isOwner(userId) && incoming().displayName is string;
+      allow create, update: if isSignedIn() && isOwner(userId) && isValidUserProfile(incoming(), userId);
       allow delete: if isAdmin();
     }
 
