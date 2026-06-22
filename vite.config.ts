@@ -8,7 +8,8 @@ function injectMissingLucideImports(): Plugin {
     name: 'inject-missing-lucide-imports',
     enforce: 'pre',
     transform(code, id) {
-      if (!id.endsWith('/src/App.tsx')) return null;
+      const normalizedId = id.replace(/\\/g, '/');
+      if (!normalizedId.endsWith('/src/App.tsx')) return null;
 
       const lucideImport = code.match(/import\s*\{[\s\S]*?\}\s*from ['"]lucide-react['"];?/);
       const alreadyImportsLock = lucideImport?.[0]?.includes('Lock') ?? false;
