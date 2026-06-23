@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { applyRateLimitHeaders, checkRateLimit, getRequestIp } from '../src/server/rateLimit';
 import { verifyFirebaseIdTokenFromRequest } from '../src/server/firebaseAuth';
 import { requireAppCheck } from '../src/server/appCheck';
+import { writeAuditLog } from '../src/server/auditLog';
 
 type TasteDna = 'Deep Thinker' | 'Music Hunter' | 'Cinema Eye' | 'Chaos Energy' | 'Motivation Collector';
 
@@ -142,19 +143,30 @@ async function runGeminiAnalysis(input: Required<Pick<AnalyzeSnippetRequest, 'no
 }
 
 export default async function handler(req: any, res: any) {
+  const ip = getRequestIp(req);
+
   if (req.method !== 'POST') {
+    writeAuditLog({
+      action: 'ai_analysis.method_rejected',
+      severity: 'warning',
+      ip,
+      metadata: { method: req.method },
+    });
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const hasValidAppCheck = await requireAppCheck(req, res);
-  if (!hasValidAppCheck) return;
+  if (!hasValidAppCheck) {
+    writeAuditLog({ action: 'ai_analysis.app_check_rejected', severity: 'warning', ip });
+    return;
+  }
 
-  const ip = getRequestIp(req);
   const ipLimit = checkRateLimit(`ai:ip:${ip}`, { max: 12, windowMs: 60_000 });
   applyRateLimitHeaders(res, ipLimit);
 
   if (!ipLimit.allowed) {
+    writeAuditLog({ action: 'ai_analysis.ip_rate_limited', severity: 'warning', ip });
     return res.status(429).json({ error: 'Too many AI requests. Please slow down.' });
   }
 
@@ -162,12 +174,14 @@ export default async function handler(req: any, res: any) {
   try {
     user = await verifyFirebaseIdTokenFromRequest(req);
   } catch {
+    writeAuditLog({ action: 'ai_analysis.auth_rejected', severity: 'warning', ip });
     return res.status(401).json({ error: 'Authentication required.' });
   }
 
   const userLimit = checkRateLimit(`ai:user:${user.uid}`, { max: 80, windowMs: 24 * 60 * 60 * 1000 });
   if (!userLimit.allowed) {
     applyRateLimitHeaders(res, userLimit);
+    writeAuditLog({ action: 'ai_analysis.user_rate_limited', severity: 'warning', ip, userId: user.uid });
     return res.status(429).json({ error: 'Daily AI limit reached.' });
   }
 
@@ -175,11 +189,13 @@ export default async function handler(req: any, res: any) {
   try {
     body = parseBody(req);
   } catch {
+    writeAuditLog({ action: 'ai_analysis.invalid_json', severity: 'warning', ip, userId: user.uid });
     return res.status(400).json({ error: 'Invalid JSON body.' });
   }
 
   const note = safeString(body.note, 800);
   if (!note) {
+    writeAuditLog({ action: 'ai_analysis.validation_failed', severity: 'warning', ip, userId: user.uid, metadata: { reason: 'missing_note' } });
     return res.status(400).json({ error: 'note is required.' });
   }
 
@@ -193,8 +209,27 @@ export default async function handler(req: any, res: any) {
 
   try {
     const analysis = await runGeminiAnalysis(input);
+    writeAuditLog({
+      action: 'ai_analysis.completed',
+      severity: 'info',
+      ip,
+      userId: user.uid,
+      metadata: {
+        platform: input.platform || 'unknown',
+        dna: analysis.dna,
+        confidence: analysis.confidence,
+        needsReview: analysis.safety.needsReview,
+      },
+    });
     return res.status(200).json({ analysis });
   } catch (error: any) {
+    writeAuditLog({
+      action: 'ai_analysis.provider_failed',
+      severity: 'error',
+      ip,
+      userId: user.uid,
+      metadata: { message: error?.message || 'unknown_error' },
+    });
     console.error('AI analysis failed:', error.message);
     return res.status(503).json({
       error: 'AI analysis is temporarily unavailable.',
