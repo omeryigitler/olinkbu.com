@@ -15,10 +15,25 @@ Status: in progress.
 
 ## Phase 2: App Check and API verification
 
+Status: started.
+
 - Enable Firebase App Check in monitoring mode.
 - Add client App Check token attachment for API calls.
 - Verify App Check token in every protected API route.
 - Enforce App Check after monitoring confirms legitimate traffic.
+
+Current implementation:
+
+- `src/server/appCheck.ts` verifies `X-Firebase-AppCheck` tokens against Firebase App Check JWKS.
+- `api/analyze-snippet.ts` calls App Check verification before rate-limited AI work.
+- Default mode is `monitor` so preview/production can observe headers and logs before enforcement.
+- Set `APPCHECK_ENFORCEMENT_MODE=enforce` to reject missing or invalid App Check tokens.
+
+Required Vercel/Firebase environment values:
+
+- `FIREBASE_PROJECT_NUMBER`
+- `FIREBASE_APPCHECK_APP_IDS`
+- `APPCHECK_ENFORCEMENT_MODE`
 
 ## Phase 3: Server-owned writes
 
