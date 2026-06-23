@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import { createPublicKey, createVerify } from 'crypto';
 
 const FIREBASE_APPCHECK_JWKS_URL = 'https://firebaseappcheck.googleapis.com/v1/jwks';
 const DEFAULT_PROJECT_NUMBER = '1082547983896';
@@ -17,8 +17,10 @@ type AppCheckPayload = {
   sub?: string;
 };
 
+type Jwk = Record<string, unknown> & { kid?: string };
+
 type JwksCache = {
-  keys: Map<string, JsonWebKey>;
+  keys: Map<string, Jwk>;
   expiresAt: number;
 };
 
@@ -84,8 +86,8 @@ async function fetchAppCheckJwks() {
   const cacheControl = response.headers.get('cache-control') || '';
   const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
   const maxAgeSeconds = maxAgeMatch ? Number(maxAgeMatch[1]) : 3600;
-  const payload = await response.json() as { keys?: JsonWebKey[] };
-  const keys = new Map<string, JsonWebKey>();
+  const payload = await response.json() as { keys?: Jwk[] };
+  const keys = new Map<string, Jwk>();
 
   for (const key of payload.keys || []) {
     if (key.kid) keys.set(key.kid, key);
@@ -135,8 +137,8 @@ export async function verifyFirebaseAppCheckToken(appCheckToken: string) {
     throw new Error('Unknown Firebase App Check key id.');
   }
 
-  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
-  const verifier = crypto.createVerify('RSA-SHA256');
+  const publicKey = createPublicKey({ key: jwk as any, format: 'jwk' });
+  const verifier = createVerify('RSA-SHA256');
   verifier.update(`${encodedHeader}.${encodedPayload}`);
   verifier.end();
 
