@@ -2,11 +2,12 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
+      - feature/**
+      - security-*
+      - update-*
 
 jobs:
   lint-and-build:
