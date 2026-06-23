@@ -8,6 +8,8 @@ const LEGACY_LIKE_HANDLER = `  const handleLike = async (id: string, count: numb
 
 const CLOUD_REACTION_HANDLER = `  const handleLike = async (id: string, _count?: number) => {\n    if (!user) return handleLogin();\n    const snippet = snippets.find((item) => item.id === id);\n    if (!snippet) return;\n\n    try {\n      await setSnippetReaction(db, user, snippet, 'lightbulb');\n    } catch (error) {\n      handleFirestoreError(error, OperationType.WRITE, 'snippets/reactions');\n    }\n  };`;
 
+const HOME_HERO_PATTERN = /                  \{\/\* Hero Section at the top of Home \*\/\}\n[\s\S]*?                  \{\/\* MAIN FEED: Vertical Feed \*\/\}/;
+
 function addMissingRuntimeImports(code: string) {
   let nextCode = code;
   const lucideImport = nextCode.match(/import\s*\{[\s\S]*?\}\s*from ['"]lucide-react['"];?/);
@@ -22,6 +24,10 @@ function addMissingRuntimeImports(code: string) {
     nextCode = `import { setSnippetReaction, subscribeSavedSnippetIds, toggleSnippetSave } from './lib/cloudSync';\n${nextCode}`;
   }
 
+  if (!nextCode.includes("from './components/landing/LandingHero'")) {
+    nextCode = `import { LandingHero } from './components/landing/LandingHero';\n${nextCode}`;
+  }
+
   return nextCode;
 }
 
@@ -33,6 +39,17 @@ function replaceOrThrow(code: string, search: string, replacement: string, label
   return code.replace(search, replacement);
 }
 
+function replaceHomeHeroOrThrow(code: string) {
+  if (!HOME_HERO_PATTERN.test(code)) {
+    throw new Error('patchOlinkbuApp failed: home hero target was not found.');
+  }
+
+  return code.replace(
+    HOME_HERO_PATTERN,
+    `                  <LandingHero\n                    inputUrl={inputUrl}\n                    setInputUrl={setInputUrl}\n                    onStart={() => {\n                      if (inputUrl) setActiveTab('create');\n                    }}\n                  />\n\n                  {/* MAIN FEED: Vertical Feed */}`,
+  );
+}
+
 export function patchOlinkbuApp(): Plugin {
   return {
     name: 'patch-olinkbu-app',
@@ -42,6 +59,7 @@ export function patchOlinkbuApp(): Plugin {
       if (!normalizedId.endsWith('/src/App.tsx')) return null;
 
       let nextCode = addMissingRuntimeImports(code);
+      nextCode = replaceHomeHeroOrThrow(nextCode);
       nextCode = replaceOrThrow(nextCode, LEGACY_SAVE_HANDLER, CLOUD_SAVE_HANDLER, 'legacy save handler');
       nextCode = replaceOrThrow(nextCode, LEGACY_LIKE_HANDLER, CLOUD_REACTION_HANDLER, 'legacy like handler');
 
