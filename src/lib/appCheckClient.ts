@@ -29,7 +29,7 @@ function isBrowser() {
 
 function getAppCheckModule() {
   if (!appCheckModulePromise) {
-    appCheckModulePromise = import('firebase/app-check') as Promise<FirebaseAppCheckModule>;
+    appCheckModulePromise = import('firebase/app-check') as unknown as Promise<FirebaseAppCheckModule>;
   }
 
   return appCheckModulePromise;
