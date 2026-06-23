@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { applyRateLimitHeaders, checkRateLimit, getRequestIp } from '../src/server/rateLimit';
 import { verifyFirebaseIdTokenFromRequest } from '../src/server/firebaseAuth';
+import { requireAppCheck } from '../src/server/appCheck';
 
 type TasteDna = 'Deep Thinker' | 'Music Hunter' | 'Cinema Eye' | 'Chaos Energy' | 'Motivation Collector';
 
@@ -145,6 +146,9 @@ export default async function handler(req: any, res: any) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  const hasValidAppCheck = await requireAppCheck(req, res);
+  if (!hasValidAppCheck) return;
 
   const ip = getRequestIp(req);
   const ipLimit = checkRateLimit(`ai:ip:${ip}`, { max: 12, windowMs: 60_000 });
