@@ -192,6 +192,120 @@ function patchCreateStudioMobileLayout(code: string) {
   return nextCode;
 }
 
+function patchCreateStudioShareFlow(code: string) {
+  let nextCode = code;
+
+  nextCode = replaceOnce(
+    nextCode,
+    `  const shareFileLikePilates = async (file: File, title: string, text: string, platform: 'Instagram' | 'System') => {
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title,
+        text,
+      });
+      setActionStatus('Done');
+      return;
+    }
+
+    triggerDownload(file);
+    if (platform === 'Instagram') {
+      window.open('https://instagram.com', '_blank', 'noopener,noreferrer');
+    }
+    setActionStatus('Saved');
+  };`,
+    `  const shareFileLikePilates = async (file: File, title: string, text: string, platform: 'Instagram' | 'System') => {
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title,
+          text,
+        });
+        setActionStatus('Paylaşım açıldı');
+        return true;
+      } catch (shareError) {
+        console.log('Share canceled or failed, falling back to download/open:', shareError);
+      }
+    }
+
+    triggerDownload(file);
+    if (platform === 'Instagram') {
+      window.open('https://instagram.com', '_blank', 'noopener,noreferrer');
+    }
+    setActionStatus('Dosya indirildi');
+    return false;
+  };`,
+  );
+
+  nextCode = replaceOnce(
+    nextCode,
+    `  const handleInstagramShare = async () => {
+    if (isGeneratingRef.current) return;
+    setActionStatus('Instagram');
+    setIsGenerating(true);
+    isGeneratingRef.current = true;
+
+    try {
+      const videoFile = await renderStoryVideoFile();
+      if (videoFile) {
+        await shareFileLikePilates(videoFile, 'olinkbu Instagram video', 'Olinkbu ile yakaladığım an.', 'Instagram');
+        return;
+      }
+
+      const imageFile = await generateImageFile();
+      if (!imageFile) throw new Error('Share file could not be generated.');
+      await shareFileLikePilates(imageFile, 'olinkbu Instagram story', 'Olinkbu ile yakaladığım an.', 'Instagram');
+      setActionStatus('Image Shared');
+    } catch (error) {
+      console.error('Instagram share failed:', error);
+      setActionStatus('Failed');
+    } finally {
+      setIsGenerating(false);
+      isGeneratingRef.current = false;
+      window.setTimeout(() => setActionStatus(null), 1400);
+    }
+  };`,
+    `  const handleInstagramShare = async () => {
+    if (isGeneratingRef.current) return;
+    setActionStatus('Instagram hazırlanıyor...');
+    setIsGenerating(true);
+    isGeneratingRef.current = true;
+
+    try {
+      const imageFile = await generateImageFile();
+      if (!imageFile) {
+        setActionStatus('Kart hazırlanamadı');
+        return;
+      }
+
+      await shareFileLikePilates(imageFile, 'olinkbu Instagram story', 'Olinkbu ile yakaladığım an.', 'Instagram');
+    } catch (error) {
+      console.error('Instagram share fallback failed:', error);
+      setActionStatus('Dosya indirilemedi');
+    } finally {
+      setIsGenerating(false);
+      isGeneratingRef.current = false;
+      window.setTimeout(() => setActionStatus(null), 1800);
+    }
+  };`,
+  );
+
+  nextCode = replaceOnce(
+    nextCode,
+    'Reformer Pilates projesindeki mantıkla dosya paylaşımı kullanılır: önce video dosyası denenir, cihaz desteklemiyorsa aynı kart PNG olarak sistem paylaşımına verilir. Instagram’ı paylaşım ekranından Story, Reels veya Post olarak seçebilirsin.',
+    'Reformer Pilates projesindeki güvenli dosya paylaşımı mantığı kullanılır. Instagram butonu story kartını dosya olarak paylaşır; paylaşım desteklenmezse kartı indirip Instagram’ı açar. Video için ayrı “Video indir” butonunu kullanabilirsin.',
+  );
+
+  nextCode = replaceOnce(
+    nextCode,
+    "{isGenerating && actionStatus === 'Instagram' ? 'Hazırlanıyor' : 'Instagram'}",
+    "{isGenerating ? 'Hazırlanıyor' : 'Instagram'}",
+  );
+
+  return nextCode;
+}
+
 export function landingHeroPatch(): Plugin {
   return {
     name: 'landing-hero-patch',
@@ -200,8 +314,10 @@ export function landingHeroPatch(): Plugin {
       const normalizedId = id.replace(/\\/g, '/');
 
       if (normalizedId.endsWith('/src/components/create/CreateStudio.tsx')) {
+        let nextCode = patchCreateStudioMobileLayout(code);
+        nextCode = patchCreateStudioShareFlow(nextCode);
         return {
-          code: patchCreateStudioMobileLayout(code),
+          code: nextCode,
           map: null,
         };
       }
