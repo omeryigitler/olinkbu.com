@@ -1,7 +1,22 @@
-import { getToken, initializeAppCheck, ReCaptchaEnterpriseProvider, type AppCheck } from 'firebase/app-check';
 import { firebaseApp } from './firebaseClient';
 
-let appCheckInstance: AppCheck | null = null;
+type AppCheckMode = 'off' | 'monitor' | 'enforce';
+type AppCheckInstance = unknown;
+
+type FirebaseAppCheckModule = {
+  getToken: (appCheck: AppCheckInstance, forceRefresh?: boolean) => Promise<{ token: string }>;
+  initializeAppCheck: (
+    app: typeof firebaseApp,
+    options: {
+      provider: unknown;
+      isTokenAutoRefreshEnabled: boolean;
+    },
+  ) => AppCheckInstance;
+  ReCaptchaEnterpriseProvider: new (siteKey: string) => unknown;
+};
+
+let appCheckInstance: AppCheckInstance | null = null;
+let appCheckModulePromise: Promise<FirebaseAppCheckModule> | null = null;
 let appCheckWarningShown = false;
 
 function getSiteKey() {
@@ -12,15 +27,23 @@ function isBrowser() {
   return typeof window !== 'undefined';
 }
 
-export function getAppCheckMode() {
-  return (import.meta.env.VITE_APPCHECK_MODE || 'monitor') as 'off' | 'monitor' | 'enforce';
+function getAppCheckModule() {
+  if (!appCheckModulePromise) {
+    appCheckModulePromise = import('firebase/app-check') as Promise<FirebaseAppCheckModule>;
+  }
+
+  return appCheckModulePromise;
+}
+
+export function getAppCheckMode(): AppCheckMode {
+  return (import.meta.env.VITE_APPCHECK_MODE || 'monitor') as AppCheckMode;
 }
 
 export function isAppCheckConfigured() {
   return Boolean(getSiteKey());
 }
 
-export function getClientAppCheck() {
+export async function getClientAppCheck() {
   if (!isBrowser()) return null;
   if (appCheckInstance) return appCheckInstance;
 
@@ -33,8 +56,9 @@ export function getClientAppCheck() {
     return null;
   }
 
-  appCheckInstance = initializeAppCheck(firebaseApp, {
-    provider: new ReCaptchaEnterpriseProvider(siteKey),
+  const appCheck = await getAppCheckModule();
+  appCheckInstance = appCheck.initializeAppCheck(firebaseApp, {
+    provider: new appCheck.ReCaptchaEnterpriseProvider(siteKey),
     isTokenAutoRefreshEnabled: true,
   });
 
@@ -42,11 +66,12 @@ export function getClientAppCheck() {
 }
 
 export async function getClientAppCheckToken() {
-  const appCheck = getClientAppCheck();
-  if (!appCheck) return null;
+  const appCheckInstance = await getClientAppCheck();
+  if (!appCheckInstance) return null;
 
   try {
-    const tokenResult = await getToken(appCheck, false);
+    const appCheck = await getAppCheckModule();
+    const tokenResult = await appCheck.getToken(appCheckInstance, false);
     return tokenResult.token;
   } catch (error) {
     console.warn('Unable to get Firebase App Check token:', error);
