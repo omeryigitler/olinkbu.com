@@ -3,12 +3,14 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
+import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import axios from "axios";
 
 const DEFAULT_PORT = 3000;
 const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 const STORY_VIDEO_DURATION_SECONDS = 6.2;
+const MAX_UPLOAD_SIZE_MB = 220;
 const SPOTIFY_FALLBACK_THUMBNAIL =
   "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?auto=format&fit=crop&q=80&w=800";
 
@@ -17,6 +19,8 @@ type StoryVideoRequest = {
   category?: string;
   range?: string;
   link?: string;
+  startSec?: string | number;
+  endSec?: string | number;
 };
 
 function isSpotifyTrackUrl(rawUrl: string) {
@@ -32,6 +36,11 @@ function normalizeText(value: unknown, fallback: string, maxLength = 120) {
   if (typeof value !== "string") return fallback;
   const cleaned = value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
   return cleaned ? cleaned.slice(0, maxLength) : fallback;
+}
+
+function normalizeNumber(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function wrapText(value: string, maxChars = 24, maxLines = 3) {
@@ -63,6 +72,13 @@ function ffmpegTextFilePath(filePath: string) {
   return filePath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
+function getClipTiming(payload: StoryVideoRequest, fallbackDuration = STORY_VIDEO_DURATION_SECONDS) {
+  const rawStart = Math.max(0, normalizeNumber(payload.startSec, 0));
+  const rawEnd = Math.max(0, normalizeNumber(payload.endSec, rawStart + fallbackDuration));
+  const duration = Math.min(60, Math.max(3, rawEnd > rawStart ? rawEnd - rawStart : fallbackDuration));
+  return { start: rawStart, duration };
+}
+
 async function resolveFfmpegCommand() {
   if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
 
@@ -84,7 +100,7 @@ function runFfmpeg(command: string, args: string[]) {
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("FFmpeg timed out."));
-    }, 20000);
+    }, 60000);
 
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
@@ -106,18 +122,16 @@ function runFfmpeg(command: string, args: string[]) {
   });
 }
 
-async function createStoryVideo(payload: StoryVideoRequest) {
+async function writeOverlayTextFiles(payload: StoryVideoRequest, id: string) {
   const title = wrapText(normalizeText(payload.title, "Hissiyatı anında yakala", 96));
   const category = normalizeText(payload.category, "#olinkbu", 28).replace(/^#?/, "#").toUpperCase();
   const range = normalizeText(payload.range, "Paylaşılabilir an", 42);
   const link = compactLink(normalizeText(payload.link, "olinkbu.com", 120));
-  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const tempDir = os.tmpdir();
   const titleFile = path.join(tempDir, `olinkbu-title-${id}.txt`);
   const categoryFile = path.join(tempDir, `olinkbu-category-${id}.txt`);
   const rangeFile = path.join(tempDir, `olinkbu-range-${id}.txt`);
   const linkFile = path.join(tempDir, `olinkbu-link-${id}.txt`);
-  const outputPath = path.join(tempDir, `olinkbu-instagram-video-${id}.mp4`);
 
   await Promise.all([
     fs.writeFile(titleFile, title, "utf8"),
@@ -126,13 +140,16 @@ async function createStoryVideo(payload: StoryVideoRequest) {
     fs.writeFile(linkFile, link, "utf8"),
   ]);
 
-  const ffmpeg = await resolveFfmpegCommand();
-  const titlePath = ffmpegTextFilePath(titleFile);
-  const categoryPath = ffmpegTextFilePath(categoryFile);
-  const rangePath = ffmpegTextFilePath(rangeFile);
-  const linkPath = ffmpegTextFilePath(linkFile);
-  const duration = STORY_VIDEO_DURATION_SECONDS;
-  const filter = [
+  return { titleFile, categoryFile, rangeFile, linkFile };
+}
+
+function storyCardFilter(payloadFiles: Awaited<ReturnType<typeof writeOverlayTextFiles>>, duration: number) {
+  const titlePath = ffmpegTextFilePath(payloadFiles.titleFile);
+  const categoryPath = ffmpegTextFilePath(payloadFiles.categoryFile);
+  const rangePath = ffmpegTextFilePath(payloadFiles.rangeFile);
+  const linkPath = ffmpegTextFilePath(payloadFiles.linkFile);
+
+  return [
     "drawbox=x=0:y=0:w=1080:h=1920:color=0xffffff:t=fill",
     "drawbox=x=0:y=1320:w=1080:h=600:color=0xfff5f5:t=fill",
     `drawbox=x=72:y=92:w='max(170,936*min(1,t/${duration}))':h=18:color=0xe10600:t=fill`,
@@ -153,6 +170,35 @@ async function createStoryVideo(payload: StoryVideoRequest) {
     "drawtext=text='PAYLASILABILIR VIDEO':x=112:y=1808:fontcolor=0xe10600:fontsize=26",
     "format=yuv420p",
   ].join(",");
+}
+
+function uploadedVideoFilter(payloadFiles: Awaited<ReturnType<typeof writeOverlayTextFiles>>) {
+  const titlePath = ffmpegTextFilePath(payloadFiles.titleFile);
+  const categoryPath = ffmpegTextFilePath(payloadFiles.categoryFile);
+  const linkPath = ffmpegTextFilePath(payloadFiles.linkFile);
+
+  return [
+    "scale=1080:1920:force_original_aspect_ratio=increase",
+    "crop=1080:1920",
+    "drawbox=x=0:y=0:w=1080:h=220:color=0x000000@0.42:t=fill",
+    "drawbox=x=0:y=1580:w=1080:h=340:color=0x000000@0.56:t=fill",
+    "drawtext=text='olinkbu':x=72:y=82:fontcolor=0xffffff:fontsize=70",
+    "drawbox=x=72:y=172:w=936:h=14:color=0xe10600:t=fill",
+    "drawbox=x=72:y=1646:w=230:h=58:color=0xe10600:t=fill",
+    `drawtext=textfile='${categoryPath}':x=96:y=1663:fontcolor=0xffffff:fontsize=28`,
+    `drawtext=textfile='${titlePath}':x=72:y=1740:fontcolor=0xffffff:fontsize=52:line_spacing=14`,
+    `drawtext=textfile='${linkPath}':x=72:y=1878:fontcolor=0xffffff@0.78:fontsize=28`,
+    "format=yuv420p",
+  ].join(",");
+}
+
+async function createStoryVideo(payload: StoryVideoRequest) {
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const outputPath = path.join(os.tmpdir(), `olinkbu-instagram-card-${id}.mp4`);
+  const textFiles = await writeOverlayTextFiles(payload, id);
+  const duration = STORY_VIDEO_DURATION_SECONDS;
+  const filter = storyCardFilter(textFiles, duration);
+  const ffmpeg = await resolveFfmpegCommand();
 
   const args = [
     "-y",
@@ -191,35 +237,115 @@ async function createStoryVideo(payload: StoryVideoRequest) {
     outputPath,
   ];
 
+  const tempFiles = [textFiles.titleFile, textFiles.categoryFile, textFiles.rangeFile, textFiles.linkFile, outputPath];
   try {
     await runFfmpeg(ffmpeg, args);
-    return { outputPath, tempFiles: [titleFile, categoryFile, rangeFile, linkFile, outputPath] };
+    return { outputPath, tempFiles };
   } catch (error) {
-    await Promise.allSettled([titleFile, categoryFile, rangeFile, linkFile, outputPath].map((file) => fs.unlink(file)));
+    await Promise.allSettled(tempFiles.map((file) => fs.unlink(file)));
+    throw error;
+  }
+}
+
+async function createUploadedVideoClip(inputPath: string, payload: StoryVideoRequest) {
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const outputPath = path.join(os.tmpdir(), `olinkbu-instagram-video-${id}.mp4`);
+  const textFiles = await writeOverlayTextFiles(payload, id);
+  const { start, duration } = getClipTiming(payload, 12);
+  const filter = uploadedVideoFilter(textFiles);
+  const ffmpeg = await resolveFfmpegCommand();
+
+  const args = [
+    "-y",
+    "-ss",
+    String(start),
+    "-i",
+    inputPath,
+    "-t",
+    String(duration),
+    "-filter_complex",
+    `[0:v]${filter}[v]`,
+    "-map",
+    "[v]",
+    "-map",
+    "0:a?",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-profile:v",
+    "baseline",
+    "-level",
+    "3.1",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    outputPath,
+  ];
+
+  const tempFiles = [inputPath, textFiles.titleFile, textFiles.categoryFile, textFiles.rangeFile, textFiles.linkFile, outputPath];
+  try {
+    await runFfmpeg(ffmpeg, args);
+    return { outputPath, tempFiles };
+  } catch (error) {
+    await Promise.allSettled(tempFiles.map((file) => fs.unlink(file)));
     throw error;
   }
 }
 
 async function startServer() {
   const app = express();
+  const upload = multer({
+    dest: os.tmpdir(),
+    limits: { fileSize: MAX_UPLOAD_SIZE_MB * 1024 * 1024 },
+  });
 
-  // JSON parsing for API requests
   app.use(express.json({ limit: "1mb" }));
 
   app.post("/api/story-video", async (req, res) => {
     try {
       const { outputPath, tempFiles } = await createStoryVideo(req.body || {});
       res.setHeader("Content-Type", "video/mp4");
-      res.setHeader("Content-Disposition", 'attachment; filename="olinkbu-instagram-video.mp4"');
+      res.setHeader("Content-Disposition", 'attachment; filename="olinkbu-instagram-card.mp4"');
       res.sendFile(outputPath, (error) => {
         Promise.allSettled(tempFiles.map((file) => fs.unlink(file))).catch(() => undefined);
-        if (error) {
-          console.error("Story video send error:", error);
-        }
+        if (error) console.error("Story video send error:", error);
       });
     } catch (error: any) {
       console.error("Story video generation failed:", error?.message || error);
       res.status(501).json({ error: "Story video renderer is not available on this server." });
+    }
+  });
+
+  app.post("/api/render-uploaded-video", upload.single("video"), async (req, res) => {
+    const uploadedFile = req.file;
+    if (!uploadedFile) {
+      return res.status(400).json({ error: "Video file is required." });
+    }
+
+    if (!uploadedFile.mimetype.startsWith("video/")) {
+      await fs.unlink(uploadedFile.path).catch(() => undefined);
+      return res.status(415).json({ error: "Only video files are supported." });
+    }
+
+    try {
+      const { outputPath, tempFiles } = await createUploadedVideoClip(uploadedFile.path, req.body || {});
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", 'attachment; filename="olinkbu-instagram-video.mp4"');
+      res.sendFile(outputPath, (error) => {
+        Promise.allSettled(tempFiles.map((file) => fs.unlink(file))).catch(() => undefined);
+        if (error) console.error("Uploaded video send error:", error);
+      });
+    } catch (error: any) {
+      console.error("Uploaded video render failed:", error?.message || error);
+      await fs.unlink(uploadedFile.path).catch(() => undefined);
+      res.status(500).json({ error: "Uploaded video could not be rendered." });
     }
   });
 
@@ -263,7 +389,6 @@ async function startServer() {
           });
         } catch (axiosError: any) {
           console.error(`Spotify oEmbed failed for ${cleanUrl}: ${axiosError.message}`);
-          // Send a generic music background if everything fails
           return res.json({
             thumbnail_url: SPOTIFY_FALLBACK_THUMBNAIL,
             provider: "spotify",
@@ -272,7 +397,6 @@ async function startServer() {
         }
       }
 
-      // Handle YouTube info (optional if client handles youtube thumbnails)
       if (url.includes("youtube.com") || url.includes("youtu.be")) {
         return res.json({ provider: "youtube" });
       }
@@ -284,7 +408,6 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -292,7 +415,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Production static files
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
