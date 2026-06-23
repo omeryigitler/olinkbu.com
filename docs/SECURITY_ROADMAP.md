@@ -26,7 +26,9 @@ Current implementation:
 
 - `src/server/appCheck.ts` verifies `X-Firebase-AppCheck` tokens against Firebase App Check JWKS.
 - `api/analyze-snippet.ts` calls App Check verification before rate-limited AI work.
-- Default mode is `monitor` so preview/production can observe headers and logs before enforcement.
+- `src/lib/appCheckClient.ts` initializes Firebase App Check with reCAPTCHA Enterprise when a public site key is configured.
+- `src/lib/protectedApi.ts` attaches both Firebase Auth and App Check headers to protected API calls.
+- Default server mode is `monitor` so preview/production can observe headers and logs before enforcement.
 - Set `APPCHECK_ENFORCEMENT_MODE=enforce` to reject missing or invalid App Check tokens.
 
 Required Vercel/Firebase environment values:
@@ -34,6 +36,8 @@ Required Vercel/Firebase environment values:
 - `FIREBASE_PROJECT_NUMBER`
 - `FIREBASE_APPCHECK_APP_IDS`
 - `APPCHECK_ENFORCEMENT_MODE`
+- `VITE_FIREBASE_APPCHECK_SITE_KEY`
+- `VITE_APPCHECK_MODE`
 
 ## Phase 3: Server-owned writes
 
