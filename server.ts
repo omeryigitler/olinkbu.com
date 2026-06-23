@@ -3,9 +3,22 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import axios from "axios";
 
+const DEFAULT_PORT = 3000;
+const PORT = Number(process.env.PORT) || DEFAULT_PORT;
+const SPOTIFY_FALLBACK_THUMBNAIL =
+  "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?auto=format&fit=crop&q=80&w=800";
+
+function isSpotifyTrackUrl(rawUrl: string) {
+  try {
+    const parsedUrl = new URL(rawUrl);
+    return parsedUrl.hostname === "open.spotify.com" && parsedUrl.pathname.startsWith("/track/");
+  } catch {
+    return false;
+  }
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
 
   // JSON parsing for API requests
   app.use(express.json());
@@ -21,7 +34,7 @@ async function startServer() {
       console.log(`Proxying request for URL: ${url}`);
       
       // Handle Spotify oEmbed via Proxy
-      if (url.includes("spotify.com") && url.includes("/track/")) {
+      if (isSpotifyTrackUrl(url)) {
         const cleanUrl = url.split("?")[0].split("#")[0];
         try {
           const params = new URLSearchParams({ url: cleanUrl });
@@ -33,7 +46,7 @@ async function startServer() {
           try {
             response = await axios.get(spotifyOembedUrl, {
               headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
               },
               timeout: 5000
             });
@@ -52,7 +65,7 @@ async function startServer() {
           console.error(`Spotify oEmbed failed for ${cleanUrl}: ${axiosError.message}`);
           // Send a generic music background if everything fails
           return res.json({
-            thumbnail_url: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?auto=format&fit=crop&q=80&w=800',
+            thumbnail_url: SPOTIFY_FALLBACK_THUMBNAIL,
             provider: "spotify",
             is_fallback: true
           });
