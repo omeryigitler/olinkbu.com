@@ -32,6 +32,17 @@ This checklist must be reviewed before merging deploy-bound changes.
 - [ ] API route returns bounded output.
 - [ ] API route logs non-sensitive audit metadata.
 
+## App Check rollout
+
+- [ ] Firebase Console has a registered web app provider.
+- [ ] `FIREBASE_PROJECT_NUMBER` is set in Vercel.
+- [ ] `FIREBASE_APPCHECK_APP_IDS` is set in Vercel.
+- [ ] `APPCHECK_ENFORCEMENT_MODE` starts as `monitor`.
+- [ ] Preview deployment exposes `X-App-Check-Mode: monitor`.
+- [ ] Preview deployment exposes `X-App-Check-Verified` for protected API routes.
+- [ ] Legitimate browser requests include `X-Firebase-AppCheck` before enforcement.
+- [ ] Enforcement is changed to `enforce` only after monitoring is clean.
+
 ## AI
 
 - [ ] AI key is server-only.
