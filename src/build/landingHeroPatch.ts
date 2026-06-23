@@ -192,6 +192,128 @@ function patchCreateStudioMobileLayout(code: string) {
   return nextCode;
 }
 
+function patchCreateStudioServerVideoExport(code: string) {
+  let nextCode = code;
+
+  nextCode = replaceOnce(
+    nextCode,
+    `  const renderStoryVideoFile = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof MediaRecorder === 'undefined') return null;
+
+    const stream = (canvas as HTMLCanvasElement & { captureStream?: (frameRate?: number) => MediaStream }).captureStream?.(30);
+    if (!stream) return null;
+
+    const mimeType = pickVideoMimeType();
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const durationMs = 6200;
+    const startedAt = performance.now();
+
+    return await new Promise<File>((resolve, reject) => {
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onerror = () => reject(new Error('Video üretimi tamamlanamadı.'));
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const finalMimeType = recorder.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(chunks, { type: finalMimeType });
+        const extension = getVideoExtension(finalMimeType);
+        resolve(new File([blob], \`olinkbu-instagram-video.\${extension}\`, { type: finalMimeType }));
+      };
+
+      const drawFrame = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / durationMs);
+        drawStoryCanvas(progress);
+        if (progress < 1 && recorder.state === 'recording') {
+          requestAnimationFrame(drawFrame);
+          return;
+        }
+        if (recorder.state === 'recording') recorder.stop();
+      };
+
+      drawStoryCanvas(0);
+      recorder.start(250);
+      requestAnimationFrame(drawFrame);
+    });
+  };`,
+    `  const requestServerStoryVideo = async () => {
+    const response = await fetch('/api/story-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: clipTitle,
+        category: snippetCategory,
+        range: clipRange,
+        link: shareUrl,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Server video renderer is not available.');
+    }
+
+    const blob = await response.blob();
+    if (!blob.size) throw new Error('Server returned an empty video.');
+    return new File([blob], 'olinkbu-instagram-video.mp4', { type: 'video/mp4' });
+  };
+
+  const renderStoryVideoFile = async () => {
+    try {
+      setActionStatus('MP4 hazırlanıyor...');
+      return await requestServerStoryVideo();
+    } catch (serverError) {
+      console.warn('Server MP4 renderer failed, trying browser renderer:', serverError);
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas || typeof MediaRecorder === 'undefined') return null;
+
+    const stream = (canvas as HTMLCanvasElement & { captureStream?: (frameRate?: number) => MediaStream }).captureStream?.(30);
+    if (!stream) return null;
+
+    const mimeType = pickVideoMimeType();
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const durationMs = 6200;
+    const startedAt = performance.now();
+
+    return await new Promise<File>((resolve, reject) => {
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onerror = () => reject(new Error('Video üretimi tamamlanamadı.'));
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const finalMimeType = recorder.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(chunks, { type: finalMimeType });
+        const extension = getVideoExtension(finalMimeType);
+        resolve(new File([blob], \`olinkbu-instagram-video.\${extension}\`, { type: finalMimeType }));
+      };
+
+      const drawFrame = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / durationMs);
+        drawStoryCanvas(progress);
+        if (progress < 1 && recorder.state === 'recording') {
+          requestAnimationFrame(drawFrame);
+          return;
+        }
+        if (recorder.state === 'recording') recorder.stop();
+      };
+
+      drawStoryCanvas(0);
+      recorder.start(250);
+      requestAnimationFrame(drawFrame);
+    });
+  };`,
+  );
+
+  return nextCode;
+}
+
 function patchCreateStudioShareFlow(code: string) {
   let nextCode = code;
 
@@ -222,7 +344,7 @@ function patchCreateStudioShareFlow(code: string) {
           title,
           text,
         });
-        setActionStatus('Paylaşım açıldı');
+        setActionStatus('Video paylaşımı açıldı');
         return true;
       } catch (shareError) {
         console.log('Share canceled or failed, falling back to download/open:', shareError);
@@ -233,7 +355,7 @@ function patchCreateStudioShareFlow(code: string) {
     if (platform === 'Instagram') {
       window.open('https://instagram.com', '_blank', 'noopener,noreferrer');
     }
-    setActionStatus('Dosya indirildi');
+    setActionStatus('Video indirildi');
     return false;
   };`,
   );
@@ -268,25 +390,25 @@ function patchCreateStudioShareFlow(code: string) {
   };`,
     `  const handleInstagramShare = async () => {
     if (isGeneratingRef.current) return;
-    setActionStatus('Instagram hazırlanıyor...');
+    setActionStatus('Video hazırlanıyor...');
     setIsGenerating(true);
     isGeneratingRef.current = true;
 
     try {
-      const imageFile = await generateImageFile();
-      if (!imageFile) {
-        setActionStatus('Kart hazırlanamadı');
+      const videoFile = await renderStoryVideoFile();
+      if (!videoFile) {
+        setActionStatus('Video üretilemedi');
         return;
       }
 
-      await shareFileLikePilates(imageFile, 'olinkbu Instagram story', 'Olinkbu ile yakaladığım an.', 'Instagram');
+      await shareFileLikePilates(videoFile, 'olinkbu Instagram video', 'Olinkbu ile yakaladığım an.', 'Instagram');
     } catch (error) {
-      console.error('Instagram share fallback failed:', error);
-      setActionStatus('Dosya indirilemedi');
+      console.error('Instagram video share failed:', error);
+      setActionStatus('Video üretilemedi');
     } finally {
       setIsGenerating(false);
       isGeneratingRef.current = false;
-      window.setTimeout(() => setActionStatus(null), 1800);
+      window.setTimeout(() => setActionStatus(null), 2200);
     }
   };`,
   );
@@ -294,13 +416,13 @@ function patchCreateStudioShareFlow(code: string) {
   nextCode = replaceOnce(
     nextCode,
     'Reformer Pilates projesindeki mantıkla dosya paylaşımı kullanılır: önce video dosyası denenir, cihaz desteklemiyorsa aynı kart PNG olarak sistem paylaşımına verilir. Instagram’ı paylaşım ekranından Story, Reels veya Post olarak seçebilirsin.',
-    'Reformer Pilates projesindeki güvenli dosya paylaşımı mantığı kullanılır. Instagram butonu story kartını dosya olarak paylaşır; paylaşım desteklenmezse kartı indirip Instagram’ı açar. Video için ayrı “Video indir” butonunu kullanabilirsin.',
+    'Bu akış gerçek MP4 üretir: önce sunucuda 1080x1920 branded video hazırlanır, ardından Instagram paylaşım ekranına video dosyası gönderilir. Paylaşım desteklenmezse aynı MP4 indirilir.',
   );
 
   nextCode = replaceOnce(
     nextCode,
     "{isGenerating && actionStatus === 'Instagram' ? 'Hazırlanıyor' : 'Instagram'}",
-    "{isGenerating ? 'Hazırlanıyor' : 'Instagram'}",
+    "{isGenerating ? 'Hazırlanıyor' : 'Instagram video'}",
   );
 
   return nextCode;
@@ -315,6 +437,7 @@ export function landingHeroPatch(): Plugin {
 
       if (normalizedId.endsWith('/src/components/create/CreateStudio.tsx')) {
         let nextCode = patchCreateStudioMobileLayout(code);
+        nextCode = patchCreateStudioServerVideoExport(nextCode);
         nextCode = patchCreateStudioShareFlow(nextCode);
         return {
           code: nextCode,
