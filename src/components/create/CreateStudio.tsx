@@ -4,6 +4,7 @@ import {
   Clipboard,
   Copy,
   Download,
+  Film,
   Image as ImageIcon,
   Instagram,
   Link as LinkIcon,
@@ -48,6 +49,13 @@ type CreateStudioProps = {
 };
 
 const categories = ['#felsefe', '#spor', '#motivasyon', '#komik', '#müzik'];
+const VIDEO_MIME_OPTIONS = [
+  'video/mp4;codecs=avc1',
+  'video/mp4',
+  'video/webm;codecs=vp9',
+  'video/webm;codecs=vp8',
+  'video/webm',
+];
 
 function formatSecondsToMMSS(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
@@ -59,6 +67,15 @@ function formatSecondsToMMSS(seconds: number) {
 function compactLink(link: string) {
   if (!link) return 'Link bekleniyor';
   return link.length > 42 ? `${link.slice(0, 39)}...` : link;
+}
+
+function pickVideoMimeType() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  return VIDEO_MIME_OPTIONS.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || '';
+}
+
+function getVideoExtension(mimeType: string) {
+  return mimeType.includes('mp4') ? 'mp4' : 'webm';
 }
 
 function GeneratedLinkButton({ label, link, icon, isCopied, onCopy }: { label: string; link: string; icon: ReactNode; isCopied: boolean; onCopy: () => void }) {
@@ -100,16 +117,21 @@ export function CreateStudio({
   renderClipper,
 }: CreateStudioProps) {
   const [showStoryKit, setShowStoryKit] = useState(false);
+  const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  const [videoStatus, setVideoStatus] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canStart = inputUrl.trim().length > 0;
   const shareUrl = useMemo(() => generatedLinks?.yt || generatedLinks?.ytm || generatedLinks?.spot || inputUrl.trim(), [generatedLinks, inputUrl]);
   const clipTitle = userComment.trim() || 'Hissiyatı anında yakala';
   const clipRange = parsedMedia?.platform === 'youtube' ? `${formatSecondsToMMSS(startSec)} – ${formatSecondsToMMSS(endSec)}` : 'Spotify anı';
 
-  const drawStoryCanvas = () => {
+  const drawStoryCanvas = (progress = 1) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
+
+    const eased = 1 - Math.pow(1 - Math.min(1, Math.max(0, progress)), 3);
+    const pulse = 0.5 + Math.sin(progress * Math.PI * 8) * 0.5;
 
     ctx.clearRect(0, 0, 1080, 1920);
     const bg = ctx.createLinearGradient(0, 0, 1080, 1920);
@@ -121,7 +143,7 @@ export function CreateStudio({
 
     ctx.fillStyle = '#E10600';
     ctx.beginPath();
-    ctx.roundRect(72, 92, 936, 18, 9);
+    ctx.roundRect(72, 92, 936 * Math.max(0.18, eased), 18, 9);
     ctx.fill();
 
     ctx.fillStyle = '#080808';
@@ -130,13 +152,16 @@ export function CreateStudio({
 
     ctx.fillStyle = '#E10600';
     ctx.beginPath();
-    ctx.arc(870, 170, 58, 0, Math.PI * 2);
+    ctx.arc(870, 170, 58 + pulse * 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(870, 170, 30, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.save();
+    ctx.translate(0, (1 - eased) * 70);
+    ctx.globalAlpha = 0.25 + eased * 0.75;
     ctx.fillStyle = '#111827';
     ctx.font = '900 italic 96px Inter, Arial, sans-serif';
     ctx.fillText('HİSSİYATI', 72, 520);
@@ -144,6 +169,7 @@ export function CreateStudio({
     ctx.fillText('ANINDA', 72, 640);
     ctx.fillStyle = '#111827';
     ctx.fillText('YAKALA.', 72, 760);
+    ctx.restore();
 
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(15,23,42,0.18)';
@@ -182,27 +208,42 @@ export function CreateStudio({
     ctx.font = '700 34px Inter, Arial, sans-serif';
     ctx.fillText(clipRange, 112, 1300);
 
+    ctx.strokeStyle = 'rgba(225,6,0,0.18)';
+    ctx.lineWidth = 18;
+    ctx.beginPath();
+    ctx.roundRect(112, 1438, 856, 26, 13);
+    ctx.stroke();
+    ctx.fillStyle = '#E10600';
+    ctx.beginPath();
+    ctx.roundRect(112, 1438, 856 * eased, 26, 13);
+    ctx.fill();
+
     ctx.fillStyle = '#E10600';
     ctx.beginPath();
     ctx.roundRect(112, 1486, 856, 112, 34);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 36px Inter, Arial, sans-serif';
-    ctx.fillText('KESİTİ OLINKBU İLE AÇ', 168, 1557);
+    ctx.fillText('STORY · REELS · POST', 168, 1557);
 
     ctx.fillStyle = '#475569';
     ctx.font = '700 30px Inter, Arial, sans-serif';
     ctx.fillText(compactLink(shareUrl), 112, 1695);
+
+    ctx.fillStyle = `rgba(225,6,0,${0.12 + pulse * 0.18})`;
+    ctx.beginPath();
+    ctx.arc(900, 1780, 62 + pulse * 20, 0, Math.PI * 2);
+    ctx.fill();
   };
 
   useEffect(() => {
     if (!showStoryKit) return;
-    const timer = window.setTimeout(drawStoryCanvas, 60);
+    const timer = window.setTimeout(() => drawStoryCanvas(1), 60);
     return () => window.clearTimeout(timer);
   }, [showStoryKit, clipTitle, snippetCategory, shareUrl, startSec, endSec]);
 
-  const downloadStory = () => {
-    drawStoryCanvas();
+  const downloadStoryImage = () => {
+    drawStoryCanvas(1);
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -216,6 +257,98 @@ export function CreateStudio({
       URL.revokeObjectURL(url);
     }, 'image/png');
   };
+
+  const renderStoryVideoFile = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof MediaRecorder === 'undefined') return null;
+
+    const stream = (canvas as HTMLCanvasElement & { captureStream?: (frameRate?: number) => MediaStream }).captureStream?.(30);
+    if (!stream) return null;
+
+    const mimeType = pickVideoMimeType();
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const durationMs = 6200;
+    const startedAt = performance.now();
+
+    return await new Promise<File>((resolve, reject) => {
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.onerror = () => reject(new Error('Video üretimi tamamlanamadı.'));
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const finalMimeType = recorder.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(chunks, { type: finalMimeType });
+        const extension = getVideoExtension(finalMimeType);
+        resolve(new File([blob], `olinkbu-instagram-video.${extension}`, { type: finalMimeType }));
+      };
+
+      const drawFrame = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / durationMs);
+        drawStoryCanvas(progress);
+        if (progress < 1 && recorder.state === 'recording') {
+          requestAnimationFrame(drawFrame);
+          return;
+        }
+        if (recorder.state === 'recording') recorder.stop();
+      };
+
+      drawStoryCanvas(0);
+      recorder.start(250);
+      requestAnimationFrame(drawFrame);
+    });
+  };
+
+  const withVideoFile = async (action: (file: File) => Promise<void> | void) => {
+    if (isRenderingVideo) return;
+    setIsRenderingVideo(true);
+    setVideoStatus('Video hazırlanıyor...');
+    try {
+      const file = await renderStoryVideoFile();
+      if (!file) {
+        setVideoStatus('Bu tarayıcı video üretimini desteklemiyor. PNG kartı kullanabilirsin.');
+        return;
+      }
+      await action(file);
+      setVideoStatus('Video hazır.');
+    } catch {
+      setVideoStatus('Video oluşturulamadı. Farklı bir tarayıcı veya mobil cihazda tekrar dene.');
+    } finally {
+      setIsRenderingVideo(false);
+    }
+  };
+
+  const downloadStoryVideo = () => withVideoFile((file) => {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    link.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const shareStoryVideo = () => withVideoFile(async (file) => {
+    const shareData = {
+      title: 'olinkbu Instagram video',
+      text: 'Olinkbu ile yakaladığım an.',
+      files: [file],
+    };
+
+    if (navigator.canShare?.(shareData)) {
+      await navigator.share(shareData);
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    link.click();
+    URL.revokeObjectURL(url);
+    setVideoStatus('Paylaşım desteklenmedi; video indirildi. Instagram’a yükleyebilirsin.');
+  });
 
   return (
     <div className="relative overflow-hidden rounded-[2.25rem] border border-slate-200 bg-white p-4 shadow-[0_30px_120px_-70px_rgba(15,23,42,0.75)] lg:h-[calc(100vh-8.5rem)] lg:min-h-[680px] lg:p-6">
@@ -286,7 +419,7 @@ export function CreateStudio({
 
             <div className="grid gap-3 sm:grid-cols-2">
               <button type="button" onClick={() => setShowStoryKit(true)} disabled={!shareUrl} className="flex items-center justify-center gap-3 rounded-2xl bg-slate-950 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-white transition hover:-translate-y-0.5 disabled:opacity-50">
-                <Instagram className="h-5 w-5" /> Story Kartı
+                <Instagram className="h-5 w-5" /> Story/Reels
               </button>
               <button type="button" onClick={() => onCopy(shareUrl)} disabled={!shareUrl} className="flex items-center justify-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-red-600 transition hover:bg-red-100 disabled:opacity-50">
                 <Clipboard className="h-5 w-5" /> Linki Kopyala
@@ -345,9 +478,9 @@ export function CreateStudio({
               </div>
 
               <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-lg shadow-slate-900/5">
-                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Instagram kaydırma</p>
+                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Instagram paylaşımı</p>
                 <button type="button" onClick={() => setShowStoryKit(true)} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-red-600 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700">
-                  <ImageIcon className="h-5 w-5" /> Story görseli oluştur
+                  <Film className="h-5 w-5" /> Reels/Post/Story video
                 </button>
                 <div className="mt-3 flex items-center justify-center gap-3">
                   <span className="grid h-11 w-11 place-items-center rounded-full bg-emerald-500 text-white"><Share2 className="h-4 w-4" /></span>
@@ -364,11 +497,14 @@ export function CreateStudio({
         <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-xl">
           <div className="grid w-full max-w-5xl gap-6 rounded-[2rem] bg-white p-5 shadow-2xl lg:grid-cols-[0.85fr_1.15fr]">
             <div className="flex flex-col justify-center p-3">
-              <div className="mb-4 inline-flex w-fit items-center gap-2 rounded-full bg-red-50 px-4 py-2 text-xs font-black uppercase tracking-[0.2em] text-red-600"><Instagram className="h-4 w-4" /> Story Kit</div>
-              <h3 className="text-5xl font-black italic uppercase leading-none tracking-[-0.06em] text-slate-950">Instagram için hazır kart.</h3>
-              <p className="mt-5 text-base font-semibold leading-7 text-slate-600">Bu kartı indir, hikayeye ekle ve link çıkartmasına oluşturulan bağlantıyı yapıştır.</p>
+              <div className="mb-4 inline-flex w-fit items-center gap-2 rounded-full bg-red-50 px-4 py-2 text-xs font-black uppercase tracking-[0.2em] text-red-600"><Instagram className="h-4 w-4" /> Story · Reels · Post</div>
+              <h3 className="text-5xl font-black italic uppercase leading-none tracking-[-0.06em] text-slate-950">Instagram için video hazırla.</h3>
+              <p className="mt-5 text-base font-semibold leading-7 text-slate-600">1080x1920 dikey animasyonlu video üret. Mobilde paylaş butonu sistem paylaşım penceresini açar; Instagram Story, Reels veya Post seçilebilir. Desktop’ta video dosyasını indirip yükleyebilirsin.</p>
+              {videoStatus && <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">{videoStatus}</p>}
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <button type="button" onClick={downloadStory} className="flex items-center justify-center gap-3 rounded-2xl bg-red-600 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-white"><Download className="h-5 w-5" /> İndir</button>
+                <button type="button" onClick={shareStoryVideo} disabled={isRenderingVideo} className="flex items-center justify-center gap-3 rounded-2xl bg-red-600 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-white disabled:opacity-60"><Share2 className="h-5 w-5" /> {isRenderingVideo ? 'Hazırlanıyor' : 'Instagram’a paylaş'}</button>
+                <button type="button" onClick={downloadStoryVideo} disabled={isRenderingVideo} className="flex items-center justify-center gap-3 rounded-2xl bg-slate-950 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-white disabled:opacity-60"><Film className="h-5 w-5" /> Video indir</button>
+                <button type="button" onClick={downloadStoryImage} className="flex items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-slate-900"><ImageIcon className="h-5 w-5" /> PNG indir</button>
                 <button type="button" onClick={() => onCopy(shareUrl)} className="flex items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-xs font-black uppercase tracking-[0.16em] text-slate-900"><Copy className="h-5 w-5" /> Linki kopyala</button>
               </div>
               <button type="button" onClick={() => setShowStoryKit(false)} className="mt-3 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-[0.16em] text-slate-500 hover:bg-slate-50">Kapat</button>
